@@ -7,6 +7,8 @@ from .domain import Actor, Conflict, ValidationError, boolean, choice, integer, 
 INITIAL_STATE = "draft"
 CREATE_ROLES = {'intake_officer'}
 ACTION_ROLES = {'submit': {'legal_rep', 'case_officer'}, 'request_evidence': {'case_officer'}, 'respond': {'legal_rep'}, 'decide': {'case_officer', 'supervisor'}, 'appeal': {'legal_rep'}, 'close': {'supervisor'}}
+# 两阶段转办：发起与确认均由办事处案件官员或主管执行，归属/权限在服务层按 X-Org 校验。
+TRANSFER_ROLES = {'case_officer', 'supervisor'}
 TRANSITIONS = {'submit': {'draft': 'submitted'}, 'request_evidence': {'submitted': 'evidence_requested'}, 'respond': {'evidence_requested': 'response_received'}, 'decide': {'submitted': 'decided', 'response_received': 'decided'}, 'appeal': {'decided': 'appealed'}, 'close': {'decided': 'closed', 'appealed': 'closed'}}
 
 
@@ -17,7 +19,11 @@ class DomainRules:
         all_roles = set(CREATE_ROLES)
         for roles in ACTION_ROLES.values():
             all_roles.update(roles)
+        all_roles.update(TRANSFER_ROLES)
         return role == "admin" or role in all_roles
+
+    def role_can_transfer(self, role: str) -> bool:
+        return role == "admin" or role in TRANSFER_ROLES
 
     def role_can_create(self, role: str) -> bool:
         return role == "admin" or role in CREATE_ROLES

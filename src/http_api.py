@@ -12,6 +12,9 @@ from .domain import Actor, DomainError, PermissionDenied, ValidationError
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
+TRANSFERS_RE = re.compile(r"^/api/records/(\d+)/transfers$")
+TRANSFER_RE = re.compile(r"^/api/transfers/(\d+)$")
+TRANSFER_CONFIRM_RE = re.compile(r"^/api/transfers/(\d+)/confirm$")
 
 
 def make_handler(service: Any, static_dir: Path):
@@ -87,6 +90,17 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
                     return
+                if parsed.path == "/api/office-stats":
+                    self._send(200, {"items": service.office_stats(self._actor())})
+                    return
+                match = TRANSFERS_RE.match(parsed.path)
+                if match:
+                    self._send(200, {"items": service.list_transfers(self._actor(), int(match.group(1)))})
+                    return
+                match = TRANSFER_RE.match(parsed.path)
+                if match:
+                    self._send(200, service.get_transfer(self._actor(), int(match.group(1))))
+                    return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
                 self._handle_error(exc)
@@ -106,6 +120,20 @@ def make_handler(service: Any, static_dir: Path):
                         raise ValidationError("expected_version必须是整数")
                     record = service.act(self._actor(), int(match.group(1)), version, match.group(2), body.get("data", {}))
                     self._send(200, record)
+                    return
+                match = TRANSFERS_RE.match(parsed.path)
+                if match:
+                    version = body.get("expected_version")
+                    if not isinstance(version, int):
+                        raise ValidationError("expected_version必须是整数")
+                    to_org = body.get("data", {}).get("to_org") if isinstance(body.get("data", {}), dict) else body.get("to_org")
+                    transfer = service.initiate_transfer(self._actor(), int(match.group(1)), version, to_org or "")
+                    self._send(201, transfer)
+                    return
+                match = TRANSFER_CONFIRM_RE.match(parsed.path)
+                if match:
+                    transfer = service.confirm_transfer(self._actor(), int(match.group(1)))
+                    self._send(200, transfer)
                     return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:

@@ -2,7 +2,7 @@
 from typing import Any, Dict, List, Optional
 
 from .audit import AuditRecorder
-from .domain import Actor, PermissionDenied, text
+from .domain import Actor, PermissionDenied, ValidationError, text
 from .repository import Repository
 from .rules import DomainRules
 
@@ -31,7 +31,7 @@ class Service:
         reference = text({"reference": reference}, "reference")
         prepared = self.rules.prepare_create(payload or {})
         self.rules.check_create_conflicts(prepared, self.repository.list_records(limit=500))
-        return self.repository.create(reference, self.rules.INITIAL_STATE, prepared, actor.user_id)
+        return self.repository.create(reference, self.rules.INITIAL_STATE, prepared, actor.user_id, office=(actor.organization or "").strip())
 
     def list_records(self, actor: Actor, state: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
         actor = self._actor(actor)
@@ -50,6 +50,7 @@ class Service:
         if not self.rules.role_can_action(actor.role, action):
             raise PermissionDenied("角色无权执行该操作")
         record = self.repository.get(record_id)
+        self.rules.freeze_guard(action, self.repository.pending_transfer(record_id))
         self.rules.require_transition(record, action)
         new_state, new_payload, summary = self.rules.apply_action(record, action, data or {})
         return self.repository.mutate(
@@ -62,6 +63,46 @@ class Service:
             details={"summary": summary, "input": data or {}, "from": record["state"], "to": new_state},
         )
 
+    def initiate_transfer(self, actor: Actor, record_id: int, expected_version: int, target_org: str) -> Dict[str, Any]:
+        actor = self._actor(actor)
+        self._ensure_known_role(actor)
+        if not self.rules.role_can_transfer(actor.role):
+            raise PermissionDenied("角色无权发起转办")
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
+            raise ValidationError("expected_version必须是整数")
+        record = self.repository.get(record_id)
+        prepared = self.rules.prepare_transfer(record, actor, target_org)
+        evidence_due_day = record["payload"].get("evidence_due_day")
+        return self.repository.initiate_transfer(
+            record_id=record_id,
+            expected_version=int(expected_version),
+            from_org=prepared["from_org"],
+            to_org=prepared["to_org"],
+            evidence_due_day=int(evidence_due_day) if isinstance(evidence_due_day, int) and not isinstance(evidence_due_day, bool) else None,
+            actor_id=actor.user_id,
+        )
+
+    def confirm_transfer(self, actor: Actor, transfer_id: int) -> Dict[str, Any]:
+        actor = self._actor(actor)
+        self._ensure_known_role(actor)
+        if not self.rules.role_can_transfer(actor.role):
+            raise PermissionDenied("角色无权确认转办")
+        org = self.rules.require_org(actor)
+        transfer = self.repository.get_transfer(transfer_id)
+        if transfer["status"] == "pending" and transfer["to_org"] != org:
+            raise PermissionDenied("只有接收方办事处可以确认转办")
+        return self.repository.confirm_transfer(transfer_id, actor.user_id)
+
+    def get_transfer(self, actor: Actor, transfer_id: int) -> Dict[str, Any]:
+        actor = self._actor(actor)
+        self._ensure_known_role(actor)
+        return self.repository.get_transfer(transfer_id)
+
+    def list_transfers(self, actor: Actor, record_id: int) -> List[Dict[str, Any]]:
+        actor = self._actor(actor)
+        self._ensure_known_role(actor)
+        return self.repository.list_transfers(record_id)
+
     def timeline(self, actor: Actor, record_id: int) -> List[Dict[str, Any]]:
         actor = self._actor(actor)
         self._ensure_known_role(actor)
@@ -71,3 +112,8 @@ class Service:
         actor = self._actor(actor)
         self._ensure_known_role(actor)
         return self.repository.stats()
+
+    def office_stats(self, actor: Actor) -> List[Dict[str, Any]]:
+        actor = self._actor(actor)
+        self._ensure_known_role(actor)
+        return self.repository.office_stats()

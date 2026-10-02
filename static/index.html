@@ -16,18 +16,46 @@
 <main>
   <h1>移民案件期限与材料管理</h1>
   <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
-  <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
+  <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button><button id="officeStats">办事处案件计数</button></div>
+  <h2>跨办事处转办</h2>
+  <div class="row">
+    <input id="recordId" placeholder="案件ID" size="8">
+    <input id="version" placeholder="修订号" size="8">
+    <input id="targetOrg" placeholder="接收办事处" size="14">
+    <button id="initiate">发起转办</button>
+    <input id="transferId" placeholder="转办单ID" size="8">
+    <button id="confirm">确认转办</button>
+    <button id="listTransfers">查看转办单</button>
+  </div>
   <pre id="output">点击上方按钮读取服务状态。</pre>
 </main>
 <script>
 const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
-async function show(path) {
-  const response = await fetch(path, {headers});
+async function show(path, options) {
+  const response = await fetch(path, Object.assign({headers}, options || {}));
   const data = await response.json();
   document.getElementById("output").textContent = JSON.stringify(data, null, 2);
 }
+function post(path, body) {
+  return show(path, {method: "POST", headers: Object.assign({"Content-Type": "application/json"}, headers), body: JSON.stringify(body)});
+}
 document.getElementById("load").onclick = () => show("/api/records?limit=20");
 document.getElementById("stats").onclick = () => show("/api/stats");
+document.getElementById("officeStats").onclick = () => show("/api/office-stats");
+document.getElementById("initiate").onclick = () => {
+  const id = document.getElementById("recordId").value.trim();
+  const version = parseInt(document.getElementById("version").value.trim(), 10);
+  const to_org = document.getElementById("targetOrg").value.trim();
+  return post("/api/records/" + id + "/transfers", {expected_version: version, data: {to_org}});
+};
+document.getElementById("confirm").onclick = () => {
+  const id = document.getElementById("transferId").value.trim();
+  return post("/api/transfers/" + id + "/confirm", {});
+};
+document.getElementById("listTransfers").onclick = () => {
+  const id = document.getElementById("recordId").value.trim();
+  return show("/api/records/" + id + "/transfers");
+};
 </script>
 </body>
 </html>

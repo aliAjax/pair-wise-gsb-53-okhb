@@ -1,12 +1,14 @@
 """移民案件期限与材料管理领域规则与状态转换。"""
 from typing import Any, Dict, Iterable, Tuple
 
-from .domain import Actor, Conflict, ValidationError, boolean, choice, integer, number, text, text_list
+from .domain import Actor, Conflict, PermissionDenied, ValidationError, boolean, choice, integer, number, text, text_list
 
 
 INITIAL_STATE = "draft"
 CREATE_ROLES = {'intake_officer'}
 ACTION_ROLES = {'submit': {'legal_rep', 'case_officer'}, 'request_evidence': {'case_officer'}, 'respond': {'legal_rep'}, 'decide': {'case_officer', 'supervisor'}, 'appeal': {'legal_rep'}, 'close': {'supervisor'}}
+TRANSFER_ROLES = {'case_officer', 'supervisor'}
+TRANSFER_FROZEN_ACTIONS = {'submit', 'decide'}
 TRANSITIONS = {'submit': {'draft': 'submitted'}, 'request_evidence': {'submitted': 'evidence_requested'}, 'respond': {'evidence_requested': 'response_received'}, 'decide': {'submitted': 'decided', 'response_received': 'decided'}, 'appeal': {'decided': 'appealed'}, 'close': {'decided': 'closed', 'appealed': 'closed'}}
 
 
@@ -24,6 +26,31 @@ class DomainRules:
 
     def role_can_action(self, role: str, action: str) -> bool:
         return role == "admin" or role in ACTION_ROLES.get(action, set())
+
+    def role_can_transfer(self, role: str) -> bool:
+        return role == "admin" or role in TRANSFER_ROLES
+
+    def require_org(self, actor: Actor) -> str:
+        org = (actor.organization or "").strip()
+        if not org:
+            raise ValidationError("缺少办事处归属(X-Org)")
+        return org
+
+    def freeze_guard(self, action: str, pending_transfer) -> None:
+        if pending_transfer is not None and action in TRANSFER_FROZEN_ACTIONS:
+            raise Conflict("案件正在跨办事处转办，确认前双方都不能提交或决定")
+
+    def prepare_transfer(self, record: Dict[str, Any], actor: Actor, target_org: str) -> Dict[str, Any]:
+        from_org = self.require_org(actor)
+        to_org = (target_org or "").strip()
+        if not to_org:
+            raise ValidationError("to_org不能为空")
+        if to_org == from_org:
+            raise ValidationError("目标办事处不能与当前办事处相同")
+        current_office = (record.get("office") or "").strip()
+        if current_office and current_office != from_org:
+            raise PermissionDenied("只有当前归属办事处可以发起转办")
+        return {"from_org": from_org, "to_org": to_org}
 
     def validate_create(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         p = dict(payload)
